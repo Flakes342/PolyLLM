@@ -1,0 +1,24 @@
+# Rust build output
+/target/
+
+# Python
+__pycache__/
+/*.py[cod]
+*.pyo
+*.db
+*.sqlite3
+
+# Virtual environments
+.venv/
+env/
+venv/
+
+# Model weights (too large for Git)
+models/*.gguf
+models/*.bin
+models/*.pt
+
+# OS/IDE
+.DS_Store
+.vscode/
+.idea/

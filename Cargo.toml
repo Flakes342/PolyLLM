@@ -1,0 +1,23 @@
+
+[package]
+name = "llm-inference-engine"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+candle-core = "0.9.1"
+candle-nn = "0.9.1" 
+candle-transformers = "0.9.1"
+tokenizers = "0.22"
+anyhow = "1.0"
+serde_json = "1.0"
+
+[features]
+default = []
+cuda = ["candle-core/cuda"]
+metal = ["candle-core/metal"]
+
+# For release builds with optimizations
+[profile.release]
+opt-level = 3
+lto = true
