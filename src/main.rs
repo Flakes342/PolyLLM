@@ -1,10 +1,9 @@
-use anyhow::{Error as E, Result};
-use candle_core::{DType, Device, Tensor};
+use anyhow::{Result};
+use candle_core::{Device, Tensor};
 use candle_transformers::models::quantized_llama::ModelWeights;
 use candle_transformers::generation::LogitsProcessor;
 use tokenizers::Tokenizer;
 use std::io::Write;
-use std::path::PathBuf;
 use std::fs::File;
 
 pub struct LLMInferenceEngine {
@@ -81,9 +80,15 @@ impl LLMInferenceEngine {
         
         pos += input_ids.len();
 
-        // Get the last token's logits for next token prediction
-        let last_logits = logits.get(logits.dim(0)? - 1)?;
-        
+        // Last token's logits for next token prediction
+        let last_logits = if logits.dims().len() == 3 {
+            logits.get(logits.dim(1)? - 1)?.squeeze(0)?
+        } else if logits.dims().len() == 2 {
+            logits.squeeze(0)?
+        } else {
+            logits
+        };
+
         // Apply temperature and sample first new token
         let scaled_logits = if let Some(temp) = temperature {
             (last_logits / temp)?
