@@ -5,12 +5,14 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-candle-core = "0.9.1"
-candle-nn = "0.9.1" 
+candle-core = { version = "0.9.1" }
+candle-nn = "0.9.1"
 candle-transformers = "0.9.1"
 tokenizers = "0.22"
 anyhow = "1.0"
 serde_json = "1.0"
+# cudarc = { version = "0.17.3", features = ["cuda-12060"] }
+cudarc = { version = "*", features = ["cuda-12060"] }
 
 [features]
 default = []

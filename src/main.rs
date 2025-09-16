@@ -50,7 +50,7 @@ impl LLMInferenceEngine {
         })
     }
 
-    /// Generate text from a given prompt
+    /// Generate text from a given prompt, streaming tokens to stdout
     pub fn generate(
         &mut self,
         prompt: &str,
@@ -68,80 +68,81 @@ impl LLMInferenceEngine {
         println!("\nPrompt: {}", prompt);
         println!("Starting generation...");
         print!("Response: ");
-        std::io::stdout().flush().unwrap();
+        // std::io::stdout().flush().unwrap();
 
-        // Generation loop
+        // Track position
         let mut pos = 0;
-        
-        // Process the initial prompt tokens
+
+        // Run forward on prompt
         let input_tensor = Tensor::new(input_ids, &self.device)?.unsqueeze(0)?;
-        let logits = self.model.forward(&input_tensor, pos)?;
-        let logits = logits.squeeze(0)?;
-        
+        let mut logits = self.model.forward(&input_tensor, pos)?.squeeze(0)?;
         pos += input_ids.len();
 
-        // Last token's logits for next token prediction
-        let last_logits = if logits.dims().len() == 3 {
-            logits.get(logits.dim(1)? - 1)?.squeeze(0)?
-        } else if logits.dims().len() == 2 {
-            logits.squeeze(0)?
-        } else {
-            logits
-        };
+        // Get logits for last token
+        if logits.dims().len() == 3 {
+            logits = logits.get(logits.dim(1)? - 1)?.squeeze(0)?;
+        }
 
-        // Apply temperature and sample first new token
-        let scaled_logits = if let Some(temp) = temperature {
-            (last_logits / temp)?
-        } else {
-            last_logits
-        };
-        
-        let mut next_token = self.logits_processor.sample(&scaled_logits)?;
-
-        // Generation loop for new tokens
-        for _i in 0..max_tokens {
-            all_tokens.push(next_token);
-
-            // Check for end of sequence tokens
-            if next_token == self.get_eos_token_id() {
-                break;
-            }
-
-            // Decode and print the new token
-            if let Ok(decoded) = self.tokenizer.decode(&[next_token], false) {
-                print!("{}", decoded);
-                std::io::stdout().flush().unwrap();
-            }
-
-            // Forward pass with single token
-            let input_tensor = Tensor::new(&[next_token], &self.device)?.unsqueeze(0)?;
-            let logits = self.model.forward(&input_tensor, pos)?;
-            
-            // Handle logits dimensions safely
-            let logits = if logits.dims().len() == 3 {
-                logits.squeeze(0)?.squeeze(0)? // [batch, seq, vocab] -> [vocab]
-            } else if logits.dims().len() == 2 {
-                logits.squeeze(0)? // [batch, vocab] -> [vocab]  
-            } else {
-                logits // Already [vocab]
-            };
-            
-            pos += 1;
-
-            // Apply temperature scaling if provided
-            let scaled_logits = if let Some(temp) = temperature {
+        // Sample first new token
+        let mut next_token = {
+            let scaled = if let Some(temp) = temperature {
                 (logits / temp)?
             } else {
                 logits
             };
+            self.logits_processor.sample(&scaled)?
+        };
+
+        // --- Streaming loop ---
+        let mut stream_buffer: Vec<u32> = Vec::new();
+
+        for _ in 0..max_tokens {
+            all_tokens.push(next_token);
+
+            // EOS check
+            if next_token == self.get_eos_token_id() {
+                break;
+            }
+
+            // Push to buffer and try decoding
+            stream_buffer.push(next_token);
+
+            if let Ok(decoded) = self.tokenizer.decode(&stream_buffer, false) {
+                // Only flush if we got a valid UTF-8 chunk
+                if !decoded.is_empty() {
+                    print!("{}", decoded);
+                    std::io::stdout().flush().unwrap();
+                    stream_buffer.clear(); // reset buffer once flushed
+                }
+            }
+
+            // Forward pass with just the new token
+            let input_tensor = Tensor::new(&[next_token], &self.device)?.unsqueeze(0)?;
+            let mut logits = self.model.forward(&input_tensor, pos)?;
+
+            // Handle dims
+            if logits.dims().len() == 3 {
+                logits = logits.squeeze(0)?.squeeze(0)?;
+            } else if logits.dims().len() == 2 {
+                logits = logits.squeeze(0)?;
+            }
+
+            pos += 1;
 
             // Sample next token
-            next_token = self.logits_processor.sample(&scaled_logits)?;
+            next_token = {
+                let scaled = if let Some(temp) = temperature {
+                    (logits / temp)?
+                } else {
+                    logits
+                };
+                self.logits_processor.sample(&scaled)?
+            };
         }
 
-        println!(); // New line after generation
+        println!();
 
-        // Decode full response
+        // Decode final response
         let response_tokens = &all_tokens[input_ids.len()..];
         let response = self.tokenizer
             .decode(response_tokens, false)
@@ -174,7 +175,7 @@ impl LLMInferenceEngine {
         let stdin = io::stdin();
         
         loop {
-            print!("You: ");
+            print!("User: ");
             io::stdout().flush()?;
             
             let mut input = String::new();
@@ -187,7 +188,7 @@ impl LLMInferenceEngine {
                     break;
                 },
                 "clear" => {
-                    // Clear screen (works on Windows and Unix)
+                    // Clear screen
                     if cfg!(windows) {
                         std::process::Command::new("cls").status().ok();
                     } else {
@@ -206,7 +207,7 @@ impl LLMInferenceEngine {
                 _ => {}
             }
             
-            match self.generate(input, 256, Some(0.7)) {
+            match self.generate(input, 10, Some(0.4)) {
                 Ok(_) => println!(),
                 Err(e) => eprintln!("Generation error: {}", e),
             }
@@ -272,17 +273,13 @@ fn main() -> Result<()> {
     
     let device = get_device()?;
     
-    // Model file paths - update these to match your files
-    let model_path = "C:/Users/Ayush/Documents/PolyLLM/PolyLLM/models/mistral-7b-instruct-v0.2.Q2_K.gguf"; // Common GGUF file names:
-    let tokenizer_path = "C:/Users/Ayush/Documents/PolyLLM/PolyLLM/models/tokenizer.json";
+    // Model file paths
+    let model_path = "C:/Users/Ayush/Documents/PolyLLM/PolyLLM/models/Llama-3.2-1B-Instruct-Q4_0.gguf";
+    let tokenizer_path = "C:/Users/Ayush/Documents/PolyLLM/PolyLLM/models/tokenizerLlama.json";
     
     // Check if files exist
     if !std::path::Path::new(model_path).exists() {
         eprintln!("Model file not found: {}", model_path);
-        eprintln!("\n📥 Download a GGUF model from:");
-        eprintln!("   • https://huggingface.co/models?library=gguf");
-        eprintln!("   • Popular models: llama-2-7b-chat, mistral-7b-instruct");
-        eprintln!("   • Recommended quantization: q4_0 or q5_1");
         return Ok(());
     }
     
@@ -300,23 +297,18 @@ fn main() -> Result<()> {
         Ok(mut engine) => {
             println!("\nModel loaded successfully!");
             
-            // Example single generation
-            println!("\n--- Testing Generation ---");
-            match engine.generate("Hi", 50, Some(0.8)) {
-                Ok(_) => {},
-                Err(e) => eprintln!("Test generation failed: {}", e),
-            }
+            // // Example single generation
+            // println!("\n--- Testing Generation ---");
+            // match engine.generate("Hello", 10, Some(0.8)) {
+            //     Ok(_) => {},
+            //     Err(e) => eprintln!("Test generation failed: {}", e),
+            // }
             
             // Start interactive chat
             engine.chat()?;
         },
         Err(e) => {
             eprintln!("Failed to initialize engine: {}", e);
-            eprintln!("\n Troubleshooting:");
-            eprintln!("   • Verify model file is a valid GGUF format");
-            eprintln!("   • Check tokenizer.json is from the same model");
-            eprintln!("   • Ensure sufficient RAM/VRAM for the model");
-            eprintln!("   • Try a smaller quantized model (q4_0) if out of memory");
         }
     }
     
